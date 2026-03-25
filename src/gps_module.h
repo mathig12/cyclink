@@ -5,27 +5,3 @@ void initGPS();
 bool getGPS(float &lat, float &lon);
 
 #endif
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
