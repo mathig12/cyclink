@@ -1,8 +1,20 @@
 #include <Arduino.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 #include "accident.h"
 #include "gps_module.h"
 
 #define BUTTON_PIN 4
+
+// BLE UUIDs
+#define SERVICE_UUID           "12345678-1234-5678-1234-56789abcdef0"
+#define CHARACTERISTIC_UUID    "12345678-1234-5678-1234-56789abcdef1"
+
+BLEServer* pServer = NULL;
+BLECharacteristic* pCharacteristic = NULL;
+bool deviceConnected = false;
 
 enum SystemMode {
     NORMAL,
@@ -11,7 +23,6 @@ enum SystemMode {
     EMERGENCY,
     SOS
 };
-
 
 void sendLocation();
 
@@ -24,6 +35,18 @@ const unsigned long CONFIRMATION_TIMEOUT = 30000;
 unsigned long buttonPressStart = 0;
 bool buttonHeld = false;
 
+class MyServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) {
+        deviceConnected = true;
+        Serial.println("BLE Client Connected!");
+    };
+    void onDisconnect(BLEServer* pServer) {
+        deviceConnected = false;
+        Serial.println("BLE Client Disconnected! Restarting advertising...");
+        pServer->getAdvertising()->start();
+    }
+};
+
 void setup() {
     Serial.begin(115200);
 
@@ -32,7 +55,25 @@ void setup() {
     initAccelerometer();
     initGPS();
 
-    Serial.println("CYCLINK NODE STARTED");
+    // Init BLE
+    BLEDevice::init("CYCLINK_NODE");
+    pServer = BLEDevice::createServer();
+    pServer->setCallbacks(new MyServerCallbacks());
+    BLEService *pService = pServer->createService(SERVICE_UUID);
+    pCharacteristic = pService->createCharacteristic(
+                        CHARACTERISTIC_UUID,
+                        BLECharacteristic::PROPERTY_READ   |
+                        BLECharacteristic::PROPERTY_NOTIFY 
+                      );
+    pCharacteristic->addDescriptor(new BLE2902());
+    pService->start();
+    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+    pAdvertising->addServiceUUID(SERVICE_UUID);
+    pAdvertising->setScanResponse(false);
+    pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
+    BLEDevice::startAdvertising();
+
+    Serial.println("CYCLINK NODE STARTED. BLE Advertising Active.");
 }
 
 void loop() {
@@ -53,6 +94,21 @@ void loop() {
 
     } else {
         buttonHeld = false;
+    }
+
+    float lat = 0, lon = 0;
+    getGPS(lat, lon);
+
+    // Send BLE Telemetry payload if connected
+    if (deviceConnected) {
+        // Payload format: Impact,Tilt,Lat,Lon,Mode
+        String payload = String(acc.impact, 2) + "," + 
+                         String(acc.tilt, 2) + "," + 
+                         String(lat, 6) + "," + 
+                         String(lon, 6) + "," + 
+                         String((int)currentMode);
+        pCharacteristic->setValue(payload.c_str());
+        pCharacteristic->notify();
     }
 
     switch (currentMode) {
