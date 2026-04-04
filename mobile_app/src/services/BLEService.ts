@@ -7,6 +7,7 @@ export interface BLESensorData {
   lat: number;
   lon: number;
   mode: number;
+  timestamp?: number; // Unix milliseconds when data was received
 }
 
 class BLEServiceManager {
@@ -83,6 +84,7 @@ class BLEServiceManager {
                 lat: parseFloat(parts[2]),
                 lon: parseFloat(parts[3]),
                 mode: parseInt(parts[4], 10),
+                timestamp: Date.now(),
               });
             }
           }
