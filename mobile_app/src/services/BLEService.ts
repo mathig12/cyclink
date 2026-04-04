@@ -1,4 +1,4 @@
-import { BleManager, Device, Characteristic } from 'react-native-ble-plx';
+import { BleManager, Device } from 'react-native-ble-plx';
 import { Platform, PermissionsAndroid } from 'react-native';
 
 export interface BLESensorData {
@@ -7,20 +7,53 @@ export interface BLESensorData {
   lat: number;
   lon: number;
   mode: number;
-  timestamp?: number; // Unix milliseconds when data was received
+  timestamp: number;
 }
+
+// ─── atob polyfill (must be above class) ───────────────────────────────────
+function atob(input: string = ''): string {
+  const chars =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+  let str = input.replace(/=+$/, '');
+  let output = '';
+
+  if (str.length % 4 === 1) {
+    throw new Error(
+      "'atob' failed: The string to be decoded is not correctly encoded."
+    );
+  }
+
+  for (
+    let bc = 0,
+      bs = 0,
+      buffer: any,
+      idx = 0;
+    (buffer = str.charAt(idx++));
+    ~buffer &&
+      ((bs = bc % 4 ? bs * 64 + buffer : buffer), bc++ % 4)
+      ? (output += String.fromCharCode(255 & (bs >> ((-2 * bc) & 6))))
+      : 0
+  ) {
+    buffer = chars.indexOf(buffer);
+  }
+
+  return output;
+}
+// ────────────────────────────────────────────────────────────────────────────
 
 class BLEServiceManager {
   private manager: BleManager;
   private connectedDevice: Device | null = null;
-  // Based on your main.cpp
-  private SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0";
-  private CHARACTERISTIC_UUID = "12345678-1234-5678-1234-56789abcdef1";
+  private isConnecting: boolean = false;
+
+  private readonly SERVICE_UUID        = '12345678-1234-5678-1234-56789abcdef0';
+  private readonly CHARACTERISTIC_UUID = '12345678-1234-5678-1234-56789abcdef1';
 
   constructor() {
     this.manager = new BleManager();
   }
 
+  // ── Permissions ────────────────────────────────────────────────────────────
   public async requestPermissions(): Promise<boolean> {
     if (Platform.OS === 'android') {
       const granted = await PermissionsAndroid.requestMultiple([
@@ -30,96 +63,237 @@ class BLEServiceManager {
       ]);
 
       return (
-        granted['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED &&
-        granted['android.permission.BLUETOOTH_SCAN'] === PermissionsAndroid.RESULTS.GRANTED &&
-        granted['android.permission.ACCESS_FINE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED
+        granted['android.permission.BLUETOOTH_CONNECT'] ===
+          PermissionsAndroid.RESULTS.GRANTED &&
+        granted['android.permission.BLUETOOTH_SCAN'] ===
+          PermissionsAndroid.RESULTS.GRANTED &&
+        granted['android.permission.ACCESS_FINE_LOCATION'] ===
+          PermissionsAndroid.RESULTS.GRANTED
       );
     }
-    return true; // iOS permissions handled by config-plugins mostly, but could enhance later
+    return true;
   }
 
-  public scanAndConnect(onDataUpdate: (data: BLESensorData) => void, onConnectStatusChange: (connected: boolean) => void) {
+  // ── Scan & Connect ─────────────────────────────────────────────────────────
+  public async scanAndConnect(
+    onDataUpdate: (data: BLESensorData) => void,
+    onConnectStatusChange: (connected: boolean) => void
+  ): Promise<void> {
+    // Guard 1 — already connected in JS state
+    if (this.connectedDevice) {
+      console.warn('[BLE] Already connected to a device');
+      onConnectStatusChange(true);
+      return;
+    }
+
+    // Guard 2 — connection already in progress
+    if (this.isConnecting) {
+      console.warn('[BLE] Connection already in progress');
+      return;
+    }
+
+    this.isConnecting = true;
     onConnectStatusChange(false);
-    
-    this.manager.startDeviceScan(null, null, (error, device) => {
-      if (error) {
-        console.error("BLE Scan error:", error);
+
+    try {
+      const state = await this.manager.state();
+      if (state !== 'PoweredOn') {
+        console.warn('[BLE] Bluetooth is not powered on. State:', state);
+        this.isConnecting = false;
+        onConnectStatusChange(false);
         return;
       }
 
-      if (device?.name === 'CYCLINK_NODE' || device?.localName === 'CYCLINK_NODE') {
-        this.manager.stopDeviceScan();
-        this.connectToDevice(device, onDataUpdate, onConnectStatusChange);
-      }
-    });
-  }
-
-  private async connectToDevice(device: Device, onDataUpdate: (data: BLESensorData) => void, onConnectStatusChange: (connected: boolean) => void) {
-    try {
-      const connectedDevice = await device.connect();
-      this.connectedDevice = connectedDevice;
-      onConnectStatusChange(true);
-      
-      await connectedDevice.discoverAllServicesAndCharacteristics();
-      
-      connectedDevice.monitorCharacteristicForService(
-        this.SERVICE_UUID, 
-        this.CHARACTERISTIC_UUID, 
-        (error, characteristic) => {
-          if (error) {
-            console.error(error.message);
-            onConnectStatusChange(false);
-            return;
-          }
-          if (characteristic?.value) {
-            // BLE strings come as base64 - react-native-ble-plx requires manual decoding or using an external library
-            // For simplicity, atob can be used if provided by React Native global, but rn-ble-plx gives Base64 format.
-            const decoded = atob(characteristic.value); 
-            // format: impact,tilt,lat,lon,mode
-            const parts = decoded.split(',');
-            if (parts.length >= 5) {
-              onDataUpdate({
-                impact: parseFloat(parts[0]),
-                tilt: parseFloat(parts[1]),
-                lat: parseFloat(parts[2]),
-                lon: parseFloat(parts[3]),
-                mode: parseInt(parts[4], 10),
-                timestamp: Date.now(),
-              });
-            }
-          }
-        }
+      // Check if the OS is ALREADY connected in the background
+      const nativelyConnected = await this.manager.connectedDevices([this.SERVICE_UUID]);
+      const backgroundDevice = nativelyConnected.find(
+        (d) => d.name === 'CYCLINK_NODE' || d.localName === 'CYCLINK_NODE'
       );
 
-      this.manager.onDeviceDisconnected(device.id, (error, d) => {
-        onConnectStatusChange(false);
-        this.connectedDevice = null;
-      });
+      if (backgroundDevice) {
+        console.log('[BLE] Found device already connected in OS background! Bypassing scan.');
+        await this.setupConnectedDevice(backgroundDevice, onDataUpdate, onConnectStatusChange);
+        return; // Stop here, no need to scan!
+      }
 
-    } catch (e) {
-      console.error("Connection Failed", e);
+      console.log('[BLE] Starting device scan...');
+
+      // Local flag to prevent race conditions during rapid callbacks
+      let hasFoundDevice = false;
+
+      this.manager.startDeviceScan(null, null, (error, device) => {
+        if (error) {
+          console.error('[BLE] Scan error:', error.message);
+          this.isConnecting = false;
+          onConnectStatusChange(false);
+          return;
+        }
+
+        // Guard against the "Device ?" error by ensuring ID exists
+        if (!device || !device.id) return;
+
+        // Guard against multiple callbacks firing before stopDeviceScan() completes
+        if (hasFoundDevice) return;
+
+        if (
+          device.name === 'CYCLINK_NODE' ||
+          device.localName === 'CYCLINK_NODE'
+        ) {
+          hasFoundDevice = true; // Lock further attempts immediately
+          console.log('[BLE] CYCLINK_NODE found. Stopping scan...');
+
+          this.manager.stopDeviceScan();
+          this.connectToDevice(device, onDataUpdate, onConnectStatusChange);
+        }
+      });
+    } catch (err: any) {
+      console.error('[BLE] Error initializing scan:', err.message);
+      this.isConnecting = false;
       onConnectStatusChange(false);
     }
   }
 
-  public disconnect() {
-    if (this.connectedDevice) {
-      this.manager.cancelDeviceConnection(this.connectedDevice.id);
+  // ── Connect to Device (Used only if not natively connected) ────────────────
+  private async connectToDevice(
+    device: Device,
+    onDataUpdate: (data: BLESensorData) => void,
+    onConnectStatusChange: (connected: boolean) => void
+  ): Promise<void> {
+    try {
+      console.log(`[BLE] Attempting to connect to ${device.id}...`);
+      const connectedDevice = await device.connect();
+
+      // 🛡️ FIX: Request MTU of 128 bytes to allow full GPS strings on Android
+      if (Platform.OS === 'android') {
+        try {
+          console.log('[BLE] Requesting MTU 128...');
+          await connectedDevice.requestMTU(128);
+        } catch (mtuError: any) {
+          console.warn('[BLE] MTU Request failed (can safely ignore on some devices):', mtuError.message);
+        }
+      }
+
+      await this.setupConnectedDevice(connectedDevice, onDataUpdate, onConnectStatusChange);
+    } catch (e: any) {
+      console.error('[BLE] Connection failed:', e.message);
+
+      // If we STILL hit the ghost connection trap somehow, force a cancel and clear
+      if (e.message?.includes('already connected')) {
+        console.log('[BLE] Forcing native disconnect to clear ghost state...');
+        await this.manager.cancelDeviceConnection(device.id).catch(() => {});
+      }
+
       this.connectedDevice = null;
+      this.isConnecting = false;
+      onConnectStatusChange(false);
     }
   }
-}
 
-// React Native atob polyfill for BLE Base64 decoding
-function atob(input: string = '') {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
-  let str = input.replace(/=+$/, '');
-  let output = '';
-  if (str.length % 4 == 1) throw new Error("'atob' failed: The string to be decoded is not correctly encoded.");
-  for (let bc = 0, bs = 0, buffer, idx = 0; buffer = str.charAt(idx++); ~buffer && (bs = bc % 4 ? bs * 64 + buffer : buffer, bc++ % 4) ? output += String.fromCharCode(255 & bs >> (-2 * bc & 6)) : 0) {
-    buffer = chars.indexOf(buffer);
+  // ── Setup Device (Shared logic for new and background connections) ─────────
+  private async setupConnectedDevice(
+    device: Device,
+    onDataUpdate: (data: BLESensorData) => void,
+    onConnectStatusChange: (connected: boolean) => void
+  ): Promise<void> {
+    try {
+      console.log(`[BLE] Discovering services for ${device.id}...`);
+      await device.discoverAllServicesAndCharacteristics();
+
+      this.connectedDevice = device;
+      this.isConnecting = false;
+      onConnectStatusChange(true);
+
+      this.startMonitoring(device, onDataUpdate, onConnectStatusChange);
+
+      // Handle unexpected disconnection
+      this.manager.onDeviceDisconnected(device.id, () => {
+        console.log('[BLE] Device disconnected unexpectedly');
+        this.connectedDevice = null;
+        this.isConnecting = false;
+        onConnectStatusChange(false);
+      });
+    } catch (error: any) {
+      console.error('[BLE] Failed to setup services:', error.message);
+      this.connectedDevice = null;
+      this.isConnecting = false;
+      onConnectStatusChange(false);
+    }
   }
-  return output;
+
+  // ── Monitor Characteristic ─────────────────────────────────────────────────
+  private startMonitoring(
+    device: Device,
+    onDataUpdate: (data: BLESensorData) => void,
+    onConnectStatusChange: (connected: boolean) => void
+  ): void {
+    console.log('[BLE] Starting characteristic monitor...');
+
+    device.monitorCharacteristicForService(
+      this.SERVICE_UUID,
+      this.CHARACTERISTIC_UUID,
+      (error, characteristic) => {
+        if (error) {
+          // Ignore cancellation errors on intentional disconnect
+          if (error.message?.includes('cancelled') || error.message?.includes('destroyed')) {
+            console.log('[BLE] Monitor cancelled (expected on disconnect)');
+            return;
+          }
+          console.error('[BLE] Monitor error:', error.message);
+          onConnectStatusChange(false);
+          return;
+        }
+
+        if (!characteristic?.value) return;
+
+        try {
+          const decoded = atob(characteristic.value);
+          const parts = decoded.split(',');
+
+          // 🛡️ FIX: Safe parser. Requires at least impact and tilt (2 items).
+          // Defaults missing GPS/Mode variables to 0 if the payload is shortened.
+          if (parts.length >= 2) {
+            onDataUpdate({
+              impact:    parseFloat(parts[0]) || 0,
+              tilt:      parseFloat(parts[1]) || 0,
+              lat:       parts.length > 2 ? parseFloat(parts[2]) : 0,
+              lon:       parts.length > 3 ? parseFloat(parts[3]) : 0,
+              mode:      parts.length > 4 ? parseInt(parts[4], 10) : 0,
+              timestamp: Date.now(),
+            });
+          } else {
+            console.warn('[BLE] Unexpected payload format (too short):', decoded);
+          }
+        } catch (decodeError) {
+          console.error('[BLE] Failed to decode payload:', decodeError);
+        }
+      }
+    );
+  }
+
+  // ── Disconnect ─────────────────────────────────────────────────────────────
+  public disconnect(): void {
+    if (this.connectedDevice) {
+      console.log('[BLE] Disconnecting device...');
+      this.manager
+        .cancelDeviceConnection(this.connectedDevice.id)
+        .catch((e) => console.warn('[BLE] Disconnect warning:', e.message));
+      this.connectedDevice = null;
+      this.isConnecting = false;
+    } else {
+      console.log('[BLE] No device to disconnect');
+    }
+  }
+
+  // ── State Helpers ──────────────────────────────────────────────────────────
+  public isDeviceConnected(): boolean {
+    return this.connectedDevice !== null;
+  }
+
+  public getConnectionStatus(): 'connected' | 'connecting' | 'disconnected' {
+    if (this.connectedDevice) return 'connected';
+    if (this.isConnecting) return 'connecting';
+    return 'disconnected';
+  }
 }
 
 export const BLEService = new BLEServiceManager();

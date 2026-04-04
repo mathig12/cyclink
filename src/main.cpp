@@ -101,13 +101,17 @@ void loop() {
 
     // Send BLE Telemetry payload if connected
     if (deviceConnected) {
-        // Payload format: Impact,Tilt,Lat,Lon,Mode
-        String payload = String(acc.impact, 2) + "," + 
-                         String(acc.tilt, 2) + "," + 
-                         String(lat, 6) + "," + 
-                         String(lon, 6) + "," + 
-                         String((int)currentMode);
-        pCharacteristic->setValue(payload.c_str());
+        // Use a 64-byte character buffer to prevent memory fragmentation 
+        // and ensure the payload is built safely.
+        char payload[64];
+        
+        // Format: Impact(2 dec), Tilt(2 dec), Lat(5 dec), Lon(5 dec), Mode(int)
+        // 5 decimal places for GPS gives ~1 meter accuracy which saves payload size
+        snprintf(payload, sizeof(payload), "%.2f,%.2f,%.5f,%.5f,%d", 
+                 acc.impact, acc.tilt, lat, lon, (int)currentMode);
+                 
+        // Send the payload as an explicit byte array with known length
+        pCharacteristic->setValue((uint8_t*)payload, strlen(payload));
         pCharacteristic->notify();
     }
 
