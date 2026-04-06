@@ -1,7 +1,7 @@
-#ifndef GPS_MODULE_H
-#define GPS_MODULE_H
+#pragma once
 
-void initGPS();
-bool getGPS(float &lat, float &lon);
-
-#endif
+void  initGPS();
+bool  getGPS(float &lat, float &lon);
+bool  hasGPSFix();
+int   getGPSSatellites();
+float getGPSHDOP();

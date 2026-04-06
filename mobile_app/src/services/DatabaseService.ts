@@ -1,17 +1,39 @@
+// src/services/DatabaseService.ts
 import * as SQLite from 'expo-sqlite';
 import { SensorRecord, RideSession, RideStats } from '../models/SensorRecord';
 
 class DatabaseServiceManager {
   private db: SQLite.SQLiteDatabase | null = null;
+  
+  // 🛡️ Added flag to prevent race conditions during React Hot Reloads
+  private isInitializing: boolean = false; 
 
   public async initialize(): Promise<void> {
+    // Guard 1: Already initialized
+    if (this.db) {
+      console.log('[DB] Database already connected.');
+      return;
+    }
+
+    // Guard 2: Initialization already in progress (prevents double-mounting crashes)
+    if (this.isInitializing) {
+      console.log('[DB] Database is currently initializing, bypassing duplicate call...');
+      return;
+    }
+
+    this.isInitializing = true;
+
     try {
+      console.log('[DB] Opening cyclink.db...');
       this.db = await SQLite.openDatabaseAsync('cyclink.db');
       await this.createTables();
-      console.log('DatabaseService initialized successfully');
+      console.log('[DB] DatabaseService initialized successfully');
     } catch (error) {
-      console.error('Failed to initialize database:', error);
+      console.error('[DB] Failed to initialize database:', error);
+      this.db = null;
       throw error;
+    } finally {
+      this.isInitializing = false; // Release the lock
     }
   }
 
@@ -346,6 +368,7 @@ class DatabaseServiceManager {
     if (this.db) {
       await this.db.closeAsync();
       this.db = null;
+      this.isInitializing = false; // Reset lock on close
     }
   }
 }

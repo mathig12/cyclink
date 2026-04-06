@@ -24,11 +24,6 @@
         "android.permission.BLUETOOTH_ADMIN",
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_ADMIN",
-        "android.permission.BLUETOOTH_CONNECT",
-        "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION"
       ],
       "package": "com.anonymous.mobile_app"
@@ -37,16 +32,6 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      [
-        "@config-plugins/react-native-ble-plx",
-        {
-          "isBackgroundEnabled": true,
-          "modes": [
-            "central"
-          ],
-          "bluetoothAlwaysPermission": "Cyclink requires Bluetooth to connect to your Node."
-        }
-      ],
       "expo-sqlite",
       [
         "expo-location",
