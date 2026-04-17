@@ -62,6 +62,32 @@ export default function DashboardScreen({ navigation }: any) {
     ).start();
   }, [pulseAnim]);
 
+  // ── Alert Timer & Logic ────────────────────────────────────────────────────
+  const alertMode = hardwareNode?.mode || 0;
+  const [countdown, setCountdown] = useState(30);
+
+  useEffect(() => {
+    // Handling countdown for Mode 2
+    let interval: NodeJS.Timeout;
+    if (alertMode === 2) {
+      if (countdown <= 0) {
+        // Assume timeout leads to EMERGENCY escalation in real app
+        // Here we just let the UI idle or could force node update
+      } else {
+        interval = setInterval(() => setCountdown(c => c - 1), 1000);
+      }
+    } else {
+      setCountdown(30);
+    }
+    
+    // Auto-navigate on Mode 3 removed as per request
+    if (alertMode === 3) {
+      console.log('[SOS] Escalating to Emergency state');
+    }
+
+    return () => clearInterval(interval);
+  }, [alertMode, countdown]);
+
   // ── Connect / Disconnect ───────────────────────────────────────────────────
   const handleConnect = async () => {
     // Prevent double tap while connecting
@@ -109,13 +135,8 @@ export default function DashboardScreen({ navigation }: any) {
     MobileSensorService.startListening((data) => setMobileNode(data));
   };
 
-  // ── Cleanup on unmount ─────────────────────────────────────────────────────
-  useEffect(() => {
-    return () => {
-      BLEService.disconnect();
-      MobileSensorService.stopListening();
-    };
-  }, []);
+  // ── SOS Toggle ─────────────────────────────────────────────────────────────
+  const [showSOSConfirmation, setShowSOSConfirmation] = useState(false);
 
   // ── Loading ────────────────────────────────────────────────────────────────
   if (!fontsLoaded) {
@@ -187,6 +208,8 @@ export default function DashboardScreen({ navigation }: any) {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0f0f0f" />
+
+      {/* ... previous code ... */}
 
       {/* ── Header ── */}
       <View style={styles.header}>
@@ -349,20 +372,94 @@ export default function DashboardScreen({ navigation }: any) {
         </View>
       </View>
 
+      {/* ── View Map Button ── */}
+      <View style={{ flexDirection: 'row', gap: 12, marginHorizontal: 16, marginTop: 16 }}>
+        <TouchableOpacity
+          style={[styles.mapBtn, { flex: 1.5 }]}
+          activeOpacity={0.85}
+          onPress={() => navigation.navigate('Map')}
+        >
+          <Text style={styles.mapBtnText}>🗺️ View Live Map</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.mapBtn, { flex: 1, backgroundColor: '#1a1a1a' }]}
+          activeOpacity={0.85}
+          onPress={() => navigation.navigate('Hotspots')}
+        >
+          <Text style={styles.mapBtnText}>🔥 Hotspots</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* ── SOS button ── */}
       <View style={styles.sosWrapper}>
         <TouchableOpacity
           style={styles.sosBtn}
           activeOpacity={0.85}
           onPress={() => {
-            // TODO: Fire SOS event to Firebase
-            console.log('[SOS] Broadcast triggered');
+            console.log('[SOS] Manual Broadcast triggered');
+            setShowSOSConfirmation(true);
           }}
         >
-          <Text style={styles.sosText}>🚨  Broadcast SOS</Text>
-          <Text style={styles.sosSub}>Alert your squad immediately</Text>
+          <Text style={styles.sosText}>🚨  EMERGENCY SOS</Text>
+          <Text style={styles.sosSub}>Request immediate help from your squad</Text>
         </TouchableOpacity>
       </View>
+
+      {/* ── MANUAL SOS CONFIRMATION MODAL ── */}
+      {showSOSConfirmation && (
+        <View style={styles.alertOverlay}>
+          <View style={[styles.alertBox, { borderColor: BRAND, shadowColor: BRAND }]}>
+            <Text style={styles.alertEmoji}>✅</Text>
+            <Text style={styles.alertTitle}>SOS Triggered</Text>
+            <Text style={styles.alertDesc}>
+              Don't worry, your friends have been alerted and are already on their way to your location.
+            </Text>
+
+            <TouchableOpacity
+              style={[styles.cancelBtn, { backgroundColor: '#FFF', width: '100%', marginTop: 25 }]}
+              activeOpacity={0.8}
+              onPress={() => setShowSOSConfirmation(false)}
+            >
+              <Text style={[styles.cancelBtnText, { color: '#000', textAlign: 'center' }]}>UNDERSTOOD</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* ── REAL-TIME EVENT-DRIVEN ALERT MODAL ── */}
+      {alertMode > 0 && (
+        <View style={styles.alertOverlay}>
+          <View style={[styles.alertBox, { borderColor: '#f44336', shadowColor: '#f44336' }]}>
+            <Animated.Text style={[styles.alertEmoji, { opacity: pulseAnim }]}>🚨</Animated.Text>
+            <Text style={styles.alertTitle}>RIDER DOWN</Text>
+            <Text style={styles.alertDesc}>
+              A member of your squad has encountered a severe impact.
+              Immediate assistance is required at their location.
+            </Text>
+
+            <TouchableOpacity
+              style={[styles.cancelBtn, { backgroundColor: BRAND, width: '100%', marginTop: 25 }]}
+              activeOpacity={0.8}
+              onPress={() => navigation.navigate('Map', { autoRoute: true })}
+            >
+              <Text style={[styles.cancelBtnText, { color: '#FFF', textAlign: 'center' }]}>🏁  GET DIRECTIONS</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.cancelBtn, { width: '100%', marginTop: 12, backgroundColor: '#222', borderWidth: 1, borderColor: '#444' }]}
+              activeOpacity={0.8}
+              onPress={() => {
+                // Clear the alert state locally
+                setHardwareNode(prev => prev ? { ...prev, mode: 0 } : null);
+              }}
+            >
+              <Text style={[styles.cancelBtnText, { color: '#aaa', textAlign: 'center', fontSize: 14 }]}>Dismiss Alert</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
     </SafeAreaView>
   );
 }
@@ -633,5 +730,76 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.7)',
     marginTop: 4,
     letterSpacing: 0.3,
+  },
+
+  // Map Button
+  mapBtn: {
+    backgroundColor: SURFACE2,
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapBtnText: {
+    fontFamily: 'ChakraPetchBold',
+    fontSize: 14,
+    color: TEXT,
+    letterSpacing: 0.5,
+  },
+
+  // Alert Modal
+  alertOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 999,
+  },
+  alertBox: {
+    backgroundColor: '#1a1a1a',
+    borderWidth: 2,
+    borderColor: '#FC4C02',
+    borderRadius: 16,
+    padding: 30,
+    width: '85%',
+    alignItems: 'center',
+    shadowColor: '#FC4C02',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 15,
+  },
+  alertEmoji: {
+    fontSize: 40,
+    marginBottom: 10,
+  },
+  alertTitle: {
+    fontFamily: 'BebasNeue',
+    fontSize: 32,
+    color: '#fff',
+    letterSpacing: 1,
+    textAlign: 'center',
+  },
+  alertDesc: {
+    fontFamily: 'ChakraPetch',
+    fontSize: 14,
+    color: '#aaa',
+    textAlign: 'center',
+    marginTop: 10,
+    lineHeight: 20,
+  },
+  cancelBtn: {
+    marginTop: 25,
+    backgroundColor: '#FFF',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+  },
+  cancelBtnText: {
+    fontFamily: 'ChakraPetchBold',
+    color: '#000',
+    fontSize: 16,
+    letterSpacing: 1,
   },
 });

@@ -39,6 +39,28 @@ function atob(input: string = ''): string {
 
   return output;
 }
+
+function btoa(input: string = ''): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+  let str = input;
+  let output = '';
+
+  for (
+    let block: any = 0, charCode: any, i = 0, map = chars;
+    str.charAt(i | 0) || ((map = '='), i % 1);
+    output += map.charAt(63 & (block >> (8 - (i % 1) * 8)))
+  ) {
+    charCode = str.charCodeAt(i += 3 / 4);
+
+    if (charCode > 0xFF) {
+      throw new Error("'btoa' failed: The string to be encoded contains characters outside of the Latin1 range.");
+    }
+    
+    block = (block << 8) | charCode;
+  }
+  
+  return output;
+}
 // ────────────────────────────────────────────────────────────────────────────
 
 class BLEServiceManager {
@@ -281,6 +303,49 @@ class BLEServiceManager {
       this.isConnecting = false;
     } else {
       console.log('[BLE] No device to disconnect');
+    }
+  }
+
+  // ── Send Cancel / Override Signal ──────────────────────────────────────────
+  public async sendCancelSignal(): Promise<boolean> {
+    if (!this.connectedDevice) {
+      console.warn('[BLE] Cannot send cancel signal. No device connected.');
+      return false;
+    }
+    
+    try {
+      // 0 = Return to Normal Mode (Safe)
+      const payload = btoa('0');
+
+      // The monitor characteristic (abcdef1) might be Notify/Read only.
+      // We will dynamically search the service for a Writable characteristic.
+      const services = await this.connectedDevice.services();
+      let targetChar = null;
+      
+      for (const service of services) {
+        if (service.uuid.toLowerCase() === this.SERVICE_UUID.toLowerCase()) {
+          const characteristics = await service.characteristics();
+          targetChar = characteristics.find(c => c.isWritableWithResponse || c.isWritableWithoutResponse);
+          break;
+        }
+      }
+
+      if (!targetChar) {
+        console.warn('[BLE] Could not find any writable characteristic on the CYCLINK_NODE service.');
+        return false;
+      }
+
+      if (targetChar.isWritableWithResponse) {
+        await targetChar.writeWithResponse(payload);
+        console.log('[BLE] Successfully dispatched cancel signal (0) to ESP32 (With Response)');
+      } else {
+        await targetChar.writeWithoutResponse(payload);
+        console.log('[BLE] Successfully dispatched cancel signal (0) to ESP32 (Without Response)');
+      }
+      return true;
+    } catch (e: any) {
+      console.warn('[BLE] Failed to write cancel command entirely:', e.message);
+      return false;
     }
   }
 
